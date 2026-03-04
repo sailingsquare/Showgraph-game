@@ -1,5 +1,7 @@
 <script>
   import { onMount } from 'svelte';
+  // ✅ MOVE THIS TO THE TOP (Line 3)
+  import { PUBLIC_TMDB_KEY } from '$env/static/public';
 
   // --- GAME STATE ---
   let guessCount = 0;
@@ -9,12 +11,10 @@
   let searchTimeout;
   let isDarkMode = true;
   let isLoading = true; 
-
-  // NEW: Variables for the Share feature
   let dayNumber = 1;
   let shareButtonText = "📋 Share Results";
 
-  import { PUBLIC_TMDB_KEY } from '$env/static/public';
+  // ✅ NOW USE IT HERE
   const apiKey = PUBLIC_TMDB_KEY;
 
   let dailyShow = null;
