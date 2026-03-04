@@ -14,8 +14,8 @@
   let dayNumber = 1;
   let shareButtonText = "📋 Share Results";
 
-  // ⚠️ PUT YOUR REAL 32-CHARACTER API KEY HERE
-  const apiKey = 'import.meta.env.VITE_TMDB_KEY'; 
+  import { PUBLIC_TMDB_KEY } from '$env/static/public';
+  const apiKey = PUBLIC_TMDB_KEY;
 
   let dailyShow = null;
 
