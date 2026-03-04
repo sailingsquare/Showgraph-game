@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   // ✅ MOVE THIS TO THE TOP (Line 3)
-  import { PUBLIC_TMDB_KEY } from '$env/static/public';
+  import { env } from '$env/dynamic/public';
 
   // --- GAME STATE ---
   let guessCount = 0;
@@ -15,7 +15,7 @@
   let shareButtonText = "📋 Share Results";
 
   // ✅ NOW USE IT HERE
-  const apiKey = PUBLIC_TMDB_KEY;
+  const apiKey = env.PUBLIC_TMDB_KEY;
 
   let dailyShow = null;
 
