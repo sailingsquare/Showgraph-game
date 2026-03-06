@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
-  // ✅ MOVE THIS TO THE TOP (Line 3)
   import { env } from '$env/dynamic/public';
+  import { fade } from 'svelte/transition';
 
   // --- GAME STATE ---
   let guessCount = 0;
@@ -11,13 +11,21 @@
   let searchTimeout;
   let isDarkMode = true;
   let isLoading = true; 
-  let dayNumber = 1;
   let shareButtonText = "📋 Share Results";
+  
+  // NEW: Tracking past guesses
+  let pastGuesses = [];
 
-  // ✅ NOW USE IT HERE
-  const apiKey = env.PUBLIC_TMDB_KEY;
+  const apiKey = env.PUBLIC_TMDB_KEY; 
 
   let dailyShow = null;
+
+  // --- ARCHIVE STATE ---
+  let currentView = 'game'; 
+  let realTodayNumber = 1;  
+  let activeDayNumber = 1;  
+  let allShowIds = [];      
+  let playerSaves = {};     
 
   // --- SVELTE MAGIC: Reactive Declarations ---
   $: maxSeason = dailyShow ? Math.max(...dailyShow.chartData.map(d => d.season)) : 0;
@@ -31,93 +39,158 @@
     return map;
   }, {}) : {};
 
-// NEW: Instead of a manual list, we will store our 365+ IDs here
-  let automatedShowPool = [];
+  // --- SAVE / LOAD LOGIC ---
+  function saveGameState() {
+    if (typeof window !== 'undefined') {
+      playerSaves[activeDayNumber] = {
+        guessCount: guessCount,
+        gameStatus: gameStatus,
+        pastGuesses: pastGuesses // NEW: Save the guess list!
+      };
+      localStorage.setItem('showgraph_saves_v2', JSON.stringify(playerSaves));
+    }
+  }
 
-  async function getAutomatedDailyShow() {
-    // 1. Calculate the 'Day Offset' from your launch date
-    const launchDate = new Date("2026-03-01T00:00:00Z");
+  function loadAllSaves() {
+    if (typeof window !== 'undefined') {
+      const oldSave = localStorage.getItem('showgraph_save');
+      if (oldSave) {
+        try {
+          const parsedOld = JSON.parse(oldSave);
+          if (parsedOld.dayNumber) {
+            playerSaves[parsedOld.dayNumber] = { 
+              guessCount: parsedOld.guessCount, 
+              gameStatus: parsedOld.gameStatus,
+              pastGuesses: [] 
+            };
+          }
+          localStorage.removeItem('showgraph_save');
+        } catch(e) {}
+      }
+
+      const savedData = localStorage.getItem('showgraph_saves_v2');
+      if (savedData) {
+        try {
+          playerSaves = JSON.parse(savedData);
+        } catch (e) {
+          console.error("Failed to parse save data", e);
+        }
+      }
+    }
+  }
+
+  function applyDayState(day) {
+    if (playerSaves[day]) {
+      guessCount = playerSaves[day].guessCount;
+      gameStatus = playerSaves[day].gameStatus;
+      pastGuesses = playerSaves[day].pastGuesses || []; // NEW: Load the list, fallback to empty if old save
+    } else {
+      guessCount = 0;
+      gameStatus = 'playing';
+      pastGuesses = []; // Reset for new games
+    }
+  }
+
+  // --- AUTOMATED ENGINE ---
+  async function initGameEngine() {
+    loadAllSaves();
+
+    const launchDate = new Date(2026, 2, 1); 
     const today = new Date();
-    const diffTime = today - launchDate;
-    const dayIndex = Math.max(0, Math.floor(diffTime / (1000 * 60 * 60 * 24)));
+    today.setHours(0, 0, 0, 0);
     
-    // Update the global dayNumber for the Share button
-    dayNumber = dayIndex + 1;
+    const diffTime = today.getTime() - launchDate.getTime();
+    realTodayNumber = Math.max(1, Math.round(diffTime / (1000 * 60 * 60 * 24)) + 1);
+
+    const allowedRegions = ["US", "JP", "KR", "GB", "IN", "FR", "DE", "MX", "BR"];
+    const excludedGenres = [10763, 10767];
 
     try {
-      // 2. Fetch the top 400 shows (20 pages of 20 results each)
-      // We only do this once to populate our year-long pool
       let showIds = [];
       for (let i = 1; i <= 20; i++) {
         const res = await fetch(`https://api.themoviedb.org/3/tv/top_rated?api_key=${apiKey}&language=en-US&page=${i}`);
         const data = await res.json();
+        
         if (data.results) {
-          showIds = [...showIds, ...data.results.map(show => show.id)];
+          const filteredShows = data.results.filter(show => {
+            const isAllowedRegion = show.origin_country && show.origin_country.some(country => allowedRegions.includes(country));
+            const isNotNewsOrTalk = !show.genre_ids.some(id => excludedGenres.includes(id));
+            return isAllowedRegion && isNotNewsOrTalk;
+          });
+          showIds = [...showIds, ...filteredShows.map(show => show.id)];
         }
       }
-
-      // 3. Pick today's ID from the list
-      // The modulo (%) ensures if you run out of shows, it loops back to the best one
-      const todaysId = showIds[dayIndex % showIds.length];
       
-      // 4. Load the data for that show
-      loadDailyShow(todaysId);
+      allShowIds = showIds;
+      playSpecificDay(realTodayNumber);
 
     } catch (error) {
-      console.error("Error building automated show pool:", error);
-      // Fallback to a classic if the top_rated fetch fails
-      loadDailyShow(1396); 
+      console.error("Error building show pool:", error);
+      allShowIds = [1396]; 
+      playSpecificDay(realTodayNumber);
     }
   }
 
-  onMount(() => {
-    if (typeof document !== 'undefined') {
-      document.body.style.backgroundColor = isDarkMode ? '#121212' : '#f9fafb';
-    }
-    // Call the new automated function instead of the manual one
-    getAutomatedDailyShow(); 
-  });
+  async function playSpecificDay(dayTarget) {
+    isLoading = true;
+    currentView = 'game';
+    activeDayNumber = dayTarget;
+    currentInput = "";
+    searchResults = [];
+    
+    applyDayState(activeDayNumber);
+    
+    const todaysId = allShowIds[(activeDayNumber - 1) % allShowIds.length];
+    await loadDailyShow(todaysId);
+  }
 
-  // --- TMDB FETCHING ---
   async function loadDailyShow(tmdbId) {
     try {
-      const showRes = await fetch(`https://api.themoviedb.org/3/tv/${tmdbId}?api_key=${apiKey}`);
+      const showRes = await fetch(`https://api.themoviedb.org/3/tv/${tmdbId}?api_key=${apiKey}&append_to_response=credits,keywords`);
       const showData = await showRes.json();
-
       let fetchedChartData = [];
 
       for (let s = 1; s <= showData.number_of_seasons; s++) {
         const seasonRes = await fetch(`https://api.themoviedb.org/3/tv/${tmdbId}/season/${s}?api_key=${apiKey}`);
         const seasonData = await seasonRes.json();
-
+        
         if (seasonData.episodes) {
-          seasonData.episodes.forEach(ep => {
+          seasonData.episodes.forEach((ep, index) => {
             if (ep.vote_average > 0) {
-              fetchedChartData.push({
-                season: s,
-                episode: ep.episode_number,
-                rating: ep.vote_average
+              fetchedChartData.push({ 
+                season: s, 
+                episode: index + 1, 
+                rating: ep.vote_average 
               });
             }
           });
         }
       }
 
+      const mainActorName = showData.credits && showData.credits.cast.length > 0 
+        ? showData.credits.cast[0].name 
+        : "Unknown";
+        
+      const topKeywords = showData.keywords && showData.keywords.results.length > 0
+        ? showData.keywords.results.slice(0, 3).map(k => k.name).join(", ")
+        : "None";
+
       dailyShow = {
         title: showData.name,
         hints: {
           network: showData.networks.length > 0 ? showData.networks[0].name : "Unknown",
           genre: showData.genres.map(g => g.name).join(", "),
-          releaseYears: `${showData.first_air_date.substring(0,4)} - ${showData.status === "Ended" && showData.last_air_date ? showData.last_air_date.substring(0,4) : "Present"}`
+          releaseYears: `${showData.first_air_date.substring(0,4)} - ${showData.status === "Ended" && showData.last_air_date ? showData.last_air_date.substring(0,4) : "Present"}`,
+          totalReviews: showData.vote_count.toLocaleString(),
+          mainActor: mainActorName,
+          keywords: topKeywords
         },
         chartData: fetchedChartData
       };
-
+      
       isLoading = false;
-
     } catch (error) {
       console.error("Failed to load show data:", error);
-      alert("Uh oh! Could not load today's show. Check your API key or internet connection.");
       isLoading = false;
     }
   }
@@ -126,11 +199,10 @@
     if (typeof document !== 'undefined') {
       document.body.style.backgroundColor = isDarkMode ? '#121212' : '#f9fafb';
     }
-    const todaysId = getTodaysShowId();
-    loadDailyShow(todaysId); 
+    initGameEngine(); 
   });
 
-  // --- UI & GAME LOGIC ---
+  // --- GAME LOGIC ---
   function getRatingColor(rating) {
     if (rating >= 9.7) return '#3b82f6'; 
     if (rating >= 9.0) return '#2e7d32'; 
@@ -147,18 +219,18 @@
     }
   }
 
+  function toggleView() {
+    currentView = currentView === 'game' ? 'archive' : 'game';
+  }
+
   async function searchTMDB(query) {
     if (query.length < 2) { searchResults = []; return; }
     const url = `https://api.themoviedb.org/3/search/tv?api_key=${apiKey}&query=${encodeURIComponent(query)}&language=en-US&page=1`;
     try {
       const response = await fetch(url);
       const data = await response.json();
-      if (data.results) {
-        searchResults = data.results.slice(0, 5); 
-      } else {
-        searchResults = [];
-      }
-    } catch (error) { console.error("Error fetching data:", error); }
+      if (data.results) { searchResults = data.results.slice(0, 5); }
+    } catch (error) { console.error("Error searching:", error); }
   }
 
   function handleInput(event) {
@@ -175,62 +247,88 @@
   function handleGuess() {
     if (gameStatus !== 'playing' || isLoading || !dailyShow || currentInput.trim() === "") return;
     
+    // NEW: Record the guess visually
+    pastGuesses = [...pastGuesses, currentInput];
+
     if (currentInput.toLowerCase() === dailyShow.title.toLowerCase()) {
       gameStatus = 'won';
     } else {
       guessCount += 1;
       if (guessCount >= 6) gameStatus = 'lost';
     }
+    
+    saveGameState();
+    
     currentInput = ""; 
     searchResults = []; 
   }
 
-  // NEW: The Share Function!
   function shareResults() {
     const finalScore = gameStatus === 'won' ? guessCount + 1 : 'X';
     let emojiBoxes = '';
     
-    // Loop 6 times to build the boxes
     for (let i = 0; i < 6; i++) {
-      if (i < guessCount) {
-        emojiBoxes += '🟥'; // Wrong guesses
-      } else if (i === guessCount && gameStatus === 'won') {
-        emojiBoxes += '🟩'; // The winning guess
-      } else {
-        emojiBoxes += '⬛'; // Unused guesses
-      }
+      if (i < guessCount) emojiBoxes += '🟥';
+      else if (i === guessCount && gameStatus === 'won') emojiBoxes += '🟩';
+      else emojiBoxes += '⬛';
     }
-
-    const shareText = `ShowGraph #${dayNumber} 📺\nScore: ${finalScore}/6\n${emojiBoxes}\nPlay at: localhost:5173`;
-
-    // Copies to the user's clipboard
+    
+    const shareText = `ShowGraph #${activeDayNumber} 📺\nScore: ${finalScore}/6\n${emojiBoxes}\nPlay at: showgraph.vercel.app`;
+    
     navigator.clipboard.writeText(shareText).then(() => {
       shareButtonText = "✅ Copied!";
-      // Reset the button text after 2 seconds
       setTimeout(() => { shareButtonText = "📋 Share Results"; }, 2000);
-    }).catch(err => {
-      console.error('Failed to copy text: ', err);
-      shareButtonText = "❌ Error";
     });
   }
 </script>
 
 <div class="theme-wrapper {isDarkMode ? 'dark-theme' : 'light-theme'}">
   <div class="game-container">
-    
     <header class="game-header">
-      <h1>ShowGraph</h1>
-      <button class="theme-btn" on:click={toggleTheme}>
-        {isDarkMode ? '☀️ Light' : '🌙 Dark'}
-      </button>
+      <div class="header-titles">
+        <h1>ShowGraph</h1>
+        <span class="day-badge">Day #{activeDayNumber}</span>
+      </div>
+      <div class="header-actions">
+        <button class="theme-btn" on:click={toggleView}>
+          {currentView === 'game' ? '📚 Past Puzzles' : '🎮 Back to Game'}
+        </button>
+        <button class="theme-btn" on:click={toggleTheme}>
+          {isDarkMode ? '☀️' : '🌙'}
+        </button>
+      </div>
     </header>
 
     {#if isLoading}
-      <div style="padding: 50px; text-align: center;">
-        <h2>Loading today's puzzle... 📺</h2>
+      <div class="loading-state">
+        <h2>Loading puzzle... 📺</h2>
       </div>
+    {:else if currentView === 'archive'}
+      <div class="archive-container" in:fade={{ duration: 200 }}>
+        <h2>Puzzle Archive</h2>
+        <p>Catch up on past TV shows you might have missed.</p>
+        
+        <div class="archive-grid">
+          {#each Array.from({ length: realTodayNumber }, (_, i) => i + 1) as day}
+            {@const save = playerSaves[day]}
+            <button 
+              class="archive-btn {save ? save.gameStatus : 'unplayed'} {day === activeDayNumber ? 'active-puzzle' : ''}" 
+              on:click={() => playSpecificDay(day)}
+            >
+              <div class="archive-day">Day {day}</div>
+              <div class="archive-status">
+                {#if save && save.gameStatus === 'won'} 🟩
+                {:else if save && save.gameStatus === 'lost'} 🟥
+                {:else if save && save.gameStatus === 'playing'} 🔄
+                {:else} ⬜ {/if}
+              </div>
+            </button>
+          {/each}
+        </div>
+      </div>
+
     {:else}
-      <div class="heatmap-wrapper">
+      <div class="heatmap-wrapper" in:fade={{ duration: 200 }}>
         <div class="heatmap">
           <div class="heatmap-row">
             <div class="heatmap-cell empty"></div>
@@ -257,35 +355,89 @@
       </div>
       
       <div class="hint-box">
-        <h3>Hints:</h3>
-        {#if guessCount >= 2} <p><strong>Network:</strong> {dailyShow.hints.network}</p> {/if}
-        {#if guessCount >= 4} <p><strong>Genre:</strong> {dailyShow.hints.genre}</p> {/if}
-        {#if guessCount >= 5} <p><strong>Release Run:</strong> {dailyShow.hints.releaseYears}</p> {/if}
+        <h3>Hints</h3>
+        <div class="hints-grid">
+          <div class="hint-card">
+            <span class="hint-label">Release Run</span>
+            <span class="hint-value">{dailyShow.hints.releaseYears}</span>
+          </div>
+          <div class="hint-card">
+            <span class="hint-label">Total Reviews</span>
+            <span class="hint-value">{dailyShow.hints.totalReviews}</span>
+          </div>
+
+          {#if guessCount >= 1 || gameStatus !== 'playing'} 
+            <div class="hint-card" in:fade={{ duration: 600 }}>
+              <span class="hint-label">Network</span>
+              <span class="hint-value">{dailyShow.hints.network}</span>
+            </div>
+          {/if}
+          
+          {#if guessCount >= 2 || gameStatus !== 'playing'} 
+            <div class="hint-card" in:fade={{ duration: 600 }}>
+              <span class="hint-label">Genre</span>
+              <span class="hint-value">{dailyShow.hints.genre}</span>
+            </div>
+          {/if}
+
+          {#if guessCount >= 3 || gameStatus !== 'playing'} 
+            <div class="hint-card" in:fade={{ duration: 600 }}>
+              <span class="hint-label">Main Actor</span>
+              <span class="hint-value">{dailyShow.hints.mainActor}</span>
+            </div>
+          {/if}
+
+          {#if guessCount >= 4 || gameStatus !== 'playing'} 
+            <div class="hint-card" in:fade={{ duration: 600 }}>
+              <span class="hint-label">Keywords</span>
+              <span class="hint-value" style="text-transform: capitalize;">{dailyShow.hints.keywords}</span>
+            </div>
+          {/if}
+        </div>
       </div>
 
-      {#if gameStatus === 'won'}
-        <div class="end-screen">
-          <h2>🎉 You Win! The show was {dailyShow.title}!</h2>
-          <p>Guessed in {guessCount + 1} tries.</p>
-          <button class="share-btn" on:click={shareResults}>{shareButtonText}</button>
+      {#if pastGuesses.length > 0}
+        <div class="past-guesses-container" in:fade={{ duration: 300 }}>
+          <h4>Your Guesses</h4>
+          <ul class="guesses-list">
+            {#each pastGuesses as guess, index}
+              <li class="guess-item">
+                <span class="guess-icon">
+                  {#if index === pastGuesses.length - 1 && gameStatus === 'won'}
+                    ✅
+                  {:else}
+                    ❌
+                  {/if}
+                </span>
+                <span class="guess-text">{guess}</span>
+              </li>
+            {/each}
+          </ul>
         </div>
       {/if}
 
-      {#if gameStatus === 'lost'}
+      {#if gameStatus !== 'playing'}
         <div class="end-screen">
-          <h2>Game Over. 😢 The show was {dailyShow.title}.</h2>
+          {#if gameStatus === 'won'}
+            <h2>🎉 You Win! The show was {dailyShow.title}!</h2>
+            <p>Guessed in {guessCount + 1} tries.</p>
+          {:else}
+            <h2>Game Over. 😢 The show was {dailyShow.title}.</h2>
+          {/if}
           <button class="share-btn" on:click={shareResults}>{shareButtonText}</button>
+          
+          {#if activeDayNumber < realTodayNumber}
+             <button class="next-btn" on:click={() => playSpecificDay(activeDayNumber + 1)}>⏭️ Next Puzzle</button>
+          {/if}
         </div>
-      {/if}
-
-      {#if gameStatus === 'playing'}
+      {:else}
         <p class="guess-counter">Guesses remaining: {6 - guessCount}</p>
         
         <div class="input-row">
           <div class="search-container">
               <input 
                 type="text" 
-                class="search-input"
+                class="search-input" 
                 value={currentInput} 
                 on:input={handleInput} 
                 placeholder="Search for a TV show..." 
@@ -305,7 +457,6 @@
         </div>
       {/if}
     {/if}
-
   </div>
 </div>
 
@@ -328,6 +479,7 @@
     transition: background-color 0.3s ease, color 0.3s ease;
   }
 
+  /* --- THEME COLORS --- */
   .dark-theme {
     --bg-color: #121212;
     --text-color: #f5f5f5;
@@ -337,7 +489,7 @@
     --dropdown-hover: #444;
     --btn-bg: #4caf50;
     --btn-text: #fff;
-    --share-bg: #3b82f6; /* Blue share button */
+    --share-bg: #3b82f6; 
   }
 
   .light-theme {
@@ -349,58 +501,380 @@
     --dropdown-hover: #f3f4f6;
     --btn-bg: #3b82f6;
     --btn-text: #fff;
-    --share-bg: #10b981; /* Green share button */
+    --share-bg: #10b981; 
   }
 
-  /* ... Keep all your other CSS exactly the same ... */
+  /* --- LAYOUT --- */
+  .game-container {
+    width: 100%;
+    max-width: 600px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
 
-  .game-container { width: 100%; max-width: 600px; padding: 20px; display: flex; flex-direction: column; align-items: center; }
-  .game-header { display: flex; justify-content: space-between; align-items: center; width: 100%; margin-bottom: 20px; border-bottom: 1px solid var(--input-border); padding-bottom: 10px; }
-  .theme-btn { background: transparent; border: 1px solid var(--input-border); color: var(--text-color); padding: 6px 12px; border-radius: 20px; cursor: pointer; font-size: 14px; transition: background-color 0.2s; }
-  .theme-btn:hover { background-color: var(--input-border); }
+  .game-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    margin-bottom: 20px;
+    border-bottom: 1px solid var(--input-border);
+    padding-bottom: 10px;
+  }
+
+  .header-titles {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .day-badge {
+    background-color: var(--input-border);
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 0.8em;
+    font-weight: bold;
+    color: var(--text-color);
+  }
+
+  .header-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  .theme-btn {
+    background: transparent;
+    border: 1px solid var(--input-border);
+    color: var(--text-color);
+    padding: 6px 12px;
+    border-radius: 20px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background-color 0.2s;
+  }
+
+  .theme-btn:hover {
+    background-color: var(--input-border);
+  }
+
+  /* --- ARCHIVE UI --- */
+  .archive-container {
+    width: 100%;
+    text-align: center;
+  }
+
+  .archive-container p {
+    color: #888;
+    margin-bottom: 20px;
+  }
+
+  .archive-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+    gap: 12px;
+    width: 100%;
+  }
+
+  .archive-btn {
+    background-color: var(--input-bg);
+    border: 1px solid var(--input-border);
+    color: var(--text-color);
+    padding: 15px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    transition: transform 0.1s, box-shadow 0.2s;
+  }
+
+  .archive-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+  }
+
+  .archive-btn.active-puzzle {
+    border: 2px solid var(--btn-bg);
+  }
+
+  .archive-day {
+    font-weight: bold;
+    font-size: 0.9em;
+  }
+
+  .archive-status {
+    font-size: 1.2em;
+  }
+
+  /* --- HEATMAP --- */
+  .heatmap-wrapper {
+    background-color: var(--heatmap-bg);
+    padding: 20px;
+    border-radius: 12px;
+    margin-bottom: 20px;
+    max-width: 100%;
+    overflow-x: auto;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+  }
   
-  .heatmap-wrapper { background-color: var(--heatmap-bg); padding: 20px; border-radius: 12px; display: inline-block; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); transition: background-color 0.3s ease; max-width: 100%; overflow-x: auto; }
-  .heatmap { display: flex; flex-direction: column; gap: 4px; }
-  .heatmap-row { display: flex; gap: 4px; }
-  .heatmap-cell { width: 40px; height: 35px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; border-radius: 4px; min-width: 40px; }
-  .heatmap-cell.header { color: #888; font-weight: normal; font-size: 12px; }
-  .heatmap-cell.empty { background-color: transparent; }
-  .rating-box { color: white; text-shadow: 1px 1px 2px rgba(0,0,0,0.5); }
+  .heatmap {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  
+  .heatmap-row {
+    display: flex;
+    gap: 4px;
+  }
+  
+  .heatmap-cell {
+    width: 40px;
+    height: 35px;
+    min-width: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    font-size: 14px;
+    border-radius: 4px;
+  }
+  
+  .heatmap-cell.header {
+    color: #888;
+    font-size: 12px;
+    font-weight: normal;
+  }
+  
+  .heatmap-cell.empty {
+    background-color: transparent;
+  }
+  
+  .rating-box {
+    color: white;
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+  }
 
-  .hint-box { width: 100%; text-align: left; margin-bottom: 20px; }
-  .guess-counter { font-weight: bold; margin-bottom: 10px; }
+  /* --- HINTS UI --- */
+  .hint-box {
+    width: 100%;
+    max-width: 500px;
+    margin-bottom: 20px;
+    text-align: center;
+  }
+  
+  .hint-box h3 {
+    margin-bottom: 15px;
+    color: var(--text-color);
+  }
 
-  .input-row { display: flex; gap: 10px; width: 100%; max-width: 450px; margin-bottom: 20px; }
-  .search-container { position: relative; flex: 1; }
-  .search-input { width: 100%; height: 100%; box-sizing: border-box; padding: 10px; border-radius: 6px; border: 1px solid var(--input-border); background-color: var(--input-bg); color: var(--text-color); font-size: 16px; }
-  .dropdown-list { position: absolute; background-color: var(--input-bg); border: 1px solid var(--input-border); border-radius: 6px; width: 100%; padding: 0; margin: 4px 0 0 0; list-style: none; z-index: 10; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2); overflow: hidden; }
-  .dropdown-item { padding: 10px; cursor: pointer; border-bottom: 1px solid var(--input-border); transition: background-color 0.2s; }
-  .dropdown-item:last-child { border-bottom: none; }
-  .dropdown-item:hover { background-color: var(--dropdown-hover); }
-  .year-text { font-size: 0.8em; color: #888; }
-  .submit-btn { background-color: var(--btn-bg); color: var(--btn-text); border: none; padding: 10px 20px; border-radius: 6px; font-size: 16px; font-weight: bold; cursor: pointer; transition: opacity 0.2s; white-space: nowrap; }
-  .submit-btn:hover { opacity: 0.9; }
+  .hints-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr); 
+    gap: 12px;
+  }
 
-  /* NEW: End screen styling and share button */
+  .hint-card {
+    background-color: var(--input-bg);
+    border: 1px solid var(--input-border);
+    padding: 16px;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+  }
+
+  .hint-label {
+    font-size: 0.75em;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 6px;
+  }
+
+  .hint-value {
+    font-size: 1em;
+    font-weight: bold;
+    color: var(--text-color);
+  }
+
+  @media (max-width: 400px) {
+    .hints-grid {
+      grid-template-columns: 1fr; 
+    }
+  }
+
+  /* --- PAST GUESSES UI --- */
+  .past-guesses-container {
+    width: 100%;
+    max-width: 450px;
+    margin-bottom: 20px;
+    text-align: left;
+    background-color: var(--heatmap-bg);
+    padding: 15px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    border: 1px solid var(--input-border);
+  }
+
+  .past-guesses-container h4 {
+    margin: 0 0 10px 0;
+    color: var(--text-color);
+    font-size: 0.9em;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid var(--input-border);
+    padding-bottom: 5px;
+  }
+
+  .guesses-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .guess-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.95em;
+    color: var(--text-color);
+    background-color: var(--input-bg);
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--input-border);
+  }
+
+  .guess-icon {
+    font-size: 0.9em;
+  }
+
+  .guess-text {
+    font-weight: 500;
+  }
+
+  /* --- UI ELEMENTS --- */
+  .guess-counter {
+    font-weight: bold;
+    margin-bottom: 10px;
+  }
+
+  .input-row {
+    display: flex;
+    gap: 10px;
+    width: 100%;
+    max-width: 450px;
+    margin-bottom: 20px;
+  }
+  
+  .search-container {
+    position: relative;
+    flex: 1;
+  }
+  
+  .search-input {
+    width: 100%;
+    height: 100%;
+    padding: 10px;
+    border-radius: 6px;
+    border: 1px solid var(--input-border);
+    background-color: var(--input-bg);
+    color: var(--text-color);
+    font-size: 16px;
+    box-sizing: border-box;
+  }
+
+  .dropdown-list {
+    position: absolute;
+    background-color: var(--input-bg);
+    border: 1px solid var(--input-border);
+    width: 100%;
+    list-style: none;
+    padding: 0;
+    z-index: 10;
+    margin-top: 4px;
+    border-radius: 6px;
+    overflow: hidden;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+  }
+  
+  .dropdown-item {
+    padding: 10px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--input-border);
+    transition: background-color 0.2s;
+  }
+  
+  .dropdown-item:last-child {
+    border-bottom: none;
+  }
+  
+  .dropdown-item:hover {
+    background-color: var(--dropdown-hover);
+  }
+
+  .year-text {
+    font-size: 0.8em;
+    color: #888;
+  }
+
+  .submit-btn {
+    background-color: var(--btn-bg);
+    color: var(--btn-text);
+    border: none;
+    padding: 10px 20px;
+    border-radius: 6px;
+    font-weight: bold;
+    font-size: 16px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: opacity 0.2s;
+  }
+  
+  .submit-btn:hover {
+    opacity: 0.9;
+  }
+
+  .loading-state {
+    padding: 50px;
+    text-align: center;
+  }
+  
   .end-screen {
     text-align: center;
-    margin-top: 10px;
   }
-
-  .share-btn {
-    background-color: var(--share-bg);
+  
+  .share-btn, .next-btn {
     color: white;
     border: none;
     padding: 12px 24px;
     border-radius: 8px;
-    font-size: 18px;
+    font-size: 16px;
     font-weight: bold;
     cursor: pointer;
-    margin-top: 15px;
+    margin: 15px 5px 0 5px;
     transition: transform 0.1s, opacity 0.2s;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.15);
   }
 
-  .share-btn:hover { opacity: 0.9; }
-  .share-btn:active { transform: scale(0.97); } /* Gives a satisfying little "click" animation */
+  .share-btn {
+    background-color: var(--share-bg);
+  }
+  
+  .next-btn {
+    background-color: var(--input-border);
+    color: var(--text-color);
+  }
+  
+  .share-btn:hover, .next-btn:hover { opacity: 0.9; }
+  .share-btn:active, .next-btn:active { transform: scale(0.97); }
 </style>
