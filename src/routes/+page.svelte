@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { env } from '$env/dynamic/public';
   import { fade } from 'svelte/transition';
+  import confetti from 'canvas-confetti';
 
   // --- GAME STATE ---
   let guessCount = 0;
@@ -13,7 +14,10 @@
   let isLoading = true; 
   let shareButtonText = "📋 Share Results";
   
-  // NEW: Tracking past guesses
+  // NEW: Instructions State
+  let showInstructions = false;
+  
+  // Tracking past guesses
   let pastGuesses = [];
 
   const apiKey = env.PUBLIC_TMDB_KEY; 
@@ -39,13 +43,34 @@
     return map;
   }, {}) : {};
 
+  // --- CONFETTI LOGIC ---
+  function triggerConfetti() {
+    if (typeof window !== 'undefined') {
+      confetti({
+        particleCount: 150,
+        spread: 80,
+        origin: { y: 0.6 },
+        colors: ['#4caf50', '#3b82f6', '#fbc02d', '#ffffff']
+      });
+    }
+  }
+
+  // --- INSTRUCTIONS LOGIC ---
+  function toggleInstructions() {
+    showInstructions = !showInstructions;
+    if (showInstructions && typeof window !== 'undefined') {
+      // Mark that they've seen it so it doesn't auto-open again
+      localStorage.setItem('showgraph_seen_rules', 'true');
+    }
+  }
+
   // --- SAVE / LOAD LOGIC ---
   function saveGameState() {
     if (typeof window !== 'undefined') {
       playerSaves[activeDayNumber] = {
         guessCount: guessCount,
         gameStatus: gameStatus,
-        pastGuesses: pastGuesses // NEW: Save the guess list!
+        pastGuesses: pastGuesses 
       };
       localStorage.setItem('showgraph_saves_v2', JSON.stringify(playerSaves));
     }
@@ -53,6 +78,12 @@
 
   function loadAllSaves() {
     if (typeof window !== 'undefined') {
+      // Check if they need the tutorial auto-opened
+      if (!localStorage.getItem('showgraph_seen_rules')) {
+        showInstructions = true;
+        localStorage.setItem('showgraph_seen_rules', 'true');
+      }
+
       const oldSave = localStorage.getItem('showgraph_save');
       if (oldSave) {
         try {
@@ -83,11 +114,11 @@
     if (playerSaves[day]) {
       guessCount = playerSaves[day].guessCount;
       gameStatus = playerSaves[day].gameStatus;
-      pastGuesses = playerSaves[day].pastGuesses || []; // NEW: Load the list, fallback to empty if old save
+      pastGuesses = playerSaves[day].pastGuesses || []; 
     } else {
       guessCount = 0;
       gameStatus = 'playing';
-      pastGuesses = []; // Reset for new games
+      pastGuesses = []; 
     }
   }
 
@@ -239,6 +270,12 @@
     searchTimeout = setTimeout(() => { searchTMDB(currentInput); }, 300); 
   }
 
+  function handleKeydown(event) {
+    if (event.key === 'Enter') {
+      handleGuess();
+    }
+  }
+
   function selectShow(showName) {
     currentInput = showName;
     searchResults = []; 
@@ -247,11 +284,11 @@
   function handleGuess() {
     if (gameStatus !== 'playing' || isLoading || !dailyShow || currentInput.trim() === "") return;
     
-    // NEW: Record the guess visually
     pastGuesses = [...pastGuesses, currentInput];
 
     if (currentInput.toLowerCase() === dailyShow.title.toLowerCase()) {
       gameStatus = 'won';
+      triggerConfetti(); 
     } else {
       guessCount += 1;
       if (guessCount >= 6) gameStatus = 'lost';
@@ -273,7 +310,7 @@
       else emojiBoxes += '⬛';
     }
     
-    const shareText = `ShowGraph #${activeDayNumber} 📺\nScore: ${finalScore}/6\n${emojiBoxes}\nPlay at: showgraph.vercel.app`;
+    const shareText = `ShowGraph #${activeDayNumber} 📺\nScore: ${finalScore}/6\n${emojiBoxes}\nPlay at: https://showgraph-game.vercel.app/`;
     
     navigator.clipboard.writeText(shareText).then(() => {
       shareButtonText = "✅ Copied!";
@@ -283,6 +320,34 @@
 </script>
 
 <div class="theme-wrapper {isDarkMode ? 'dark-theme' : 'light-theme'}">
+  
+  {#if showInstructions}
+    <div class="modal-backdrop" on:click={toggleInstructions} in:fade={{ duration: 200 }}>
+      <div class="modal-content" on:click|stopPropagation>
+        <h2>How to Play ShowGraph 📺</h2>
+        <p>Guess the hidden TV show based solely on the IMDb ratings of its episodes!</p>
+        
+        <ul class="instructions-list">
+          <li><strong>The Heatmap:</strong> Each row is a season, and each box is an episode.</li>
+          <li><strong>The Colors:</strong> The colors represent the average rating:
+            <div class="legend-row">
+              <span class="legend-box" style="background-color: #d32f2f;">&lt; 6.0</span>
+              <span class="legend-box" style="background-color: #f57c00;">6.0+</span>
+              <span class="legend-box" style="background-color: #fbc02d;">7.0+</span>
+              <span class="legend-box" style="background-color: #4caf50;">8.0+</span>
+              <span class="legend-box" style="background-color: #2e7d32;">9.0+</span>
+              <span class="legend-box" style="background-color: #3b82f6;">9.7+</span>
+            </div>
+          </li>
+          <li><strong>Hints:</strong> You have 6 tries. Every incorrect guess unlocks a new hint about the show.</li>
+          <li><strong>New Games:</strong> A new puzzle unlocks every day at midnight!</li>
+        </ul>
+
+        <button class="submit-btn" style="width: 100%; margin-top: 15px;" on:click={toggleInstructions}>Let's Play!</button>
+      </div>
+    </div>
+  {/if}
+
   <div class="game-container">
     <header class="game-header">
       <div class="header-titles">
@@ -290,10 +355,11 @@
         <span class="day-badge">Day #{activeDayNumber}</span>
       </div>
       <div class="header-actions">
+        <button class="theme-btn icon-btn" on:click={toggleInstructions} title="How to Play">❓</button>
         <button class="theme-btn" on:click={toggleView}>
           {currentView === 'game' ? '📚 Past Puzzles' : '🎮 Back to Game'}
         </button>
-        <button class="theme-btn" on:click={toggleTheme}>
+        <button class="theme-btn icon-btn" on:click={toggleTheme}>
           {isDarkMode ? '☀️' : '🌙'}
         </button>
       </div>
@@ -440,6 +506,7 @@
                 class="search-input" 
                 value={currentInput} 
                 on:input={handleInput} 
+                on:keydown={handleKeydown}
                 placeholder="Search for a TV show..." 
               />
               {#if searchResults.length > 0}
@@ -555,8 +622,70 @@
     transition: background-color 0.2s;
   }
 
+  .icon-btn {
+    padding: 6px 10px;
+  }
+
   .theme-btn:hover {
     background-color: var(--input-border);
+  }
+
+  /* --- MODAL (HOW TO PLAY) --- */
+  .modal-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.6);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+    padding: 20px;
+    box-sizing: border-box;
+  }
+
+  .modal-content {
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    padding: 30px;
+    border-radius: 12px;
+    max-width: 450px;
+    width: 100%;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+    border: 1px solid var(--input-border);
+  }
+
+  .modal-content h2 {
+    margin-top: 0;
+    margin-bottom: 10px;
+  }
+
+  .instructions-list {
+    line-height: 1.6;
+    padding-left: 20px;
+    margin-bottom: 25px;
+  }
+
+  .instructions-list li {
+    margin-bottom: 10px;
+  }
+
+  .legend-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+  }
+
+  .legend-box {
+    color: white;
+    font-size: 0.8em;
+    font-weight: bold;
+    padding: 4px 8px;
+    border-radius: 4px;
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
   }
 
   /* --- ARCHIVE UI --- */
