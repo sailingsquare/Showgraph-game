@@ -14,7 +14,7 @@
   let isLoading = true; 
   let shareButtonText = "📋 Share Results";
   
-  // NEW: Instructions State
+  // Instructions State
   let showInstructions = false;
   
   // Tracking past guesses
@@ -59,7 +59,6 @@
   function toggleInstructions() {
     showInstructions = !showInstructions;
     if (showInstructions && typeof window !== 'undefined') {
-      // Mark that they've seen it so it doesn't auto-open again
       localStorage.setItem('showgraph_seen_rules', 'true');
     }
   }
@@ -78,7 +77,6 @@
 
   function loadAllSaves() {
     if (typeof window !== 'undefined') {
-      // Check if they need the tutorial auto-opened
       if (!localStorage.getItem('showgraph_seen_rules')) {
         showInstructions = true;
         localStorage.setItem('showgraph_seen_rules', 'true');
@@ -310,7 +308,8 @@
       else emojiBoxes += '⬛';
     }
     
-    const shareText = `ShowGraph #${activeDayNumber} 📺\nScore: ${finalScore}/6\n${emojiBoxes}\nPlay at: https://showgraph-game.vercel.app/`;
+    // CHANGED: Now says Teledle instead of ShowGraph
+    const shareText = `Teledle #${activeDayNumber} 📺\nScore: ${finalScore}/6\n${emojiBoxes}\nPlay at: https://showgraph-game.vercel.app/`;
     
     navigator.clipboard.writeText(shareText).then(() => {
       shareButtonText = "✅ Copied!";
@@ -324,7 +323,7 @@
   {#if showInstructions}
     <div class="modal-backdrop" on:click={toggleInstructions} in:fade={{ duration: 200 }}>
       <div class="modal-content" on:click|stopPropagation>
-        <h2>How to Play ShowGraph 📺</h2>
+        <h2>How to Play Teledle 📺</h2>
         <p>Guess the hidden TV show based solely on the IMDb ratings of its episodes!</p>
         
         <ul class="instructions-list">
@@ -351,7 +350,7 @@
   <div class="game-container">
     <header class="game-header">
       <div class="header-titles">
-        <h1>ShowGraph</h1>
+        <h1>Teledle</h1>
         <span class="day-badge">Day #{activeDayNumber}</span>
       </div>
       <div class="header-actions">
@@ -434,15 +433,15 @@
 
           {#if guessCount >= 1 || gameStatus !== 'playing'} 
             <div class="hint-card" in:fade={{ duration: 600 }}>
-              <span class="hint-label">Network</span>
-              <span class="hint-value">{dailyShow.hints.network}</span>
+              <span class="hint-label">Genre</span>
+              <span class="hint-value">{dailyShow.hints.genre}</span>
             </div>
           {/if}
           
           {#if guessCount >= 2 || gameStatus !== 'playing'} 
             <div class="hint-card" in:fade={{ duration: 600 }}>
-              <span class="hint-label">Genre</span>
-              <span class="hint-value">{dailyShow.hints.genre}</span>
+              <span class="hint-label">Original Airing Network</span>
+              <span class="hint-value">{dailyShow.hints.network}</span>
             </div>
           {/if}
 
@@ -588,7 +587,7 @@
     width: 100%;
     margin-bottom: 20px;
     border-bottom: 1px solid var(--input-border);
-    padding-bottom: 10px;
+    padding-bottom: 15px;
   }
 
   .header-titles {
@@ -1006,4 +1005,35 @@
   
   .share-btn:hover, .next-btn:hover { opacity: 0.9; }
   .share-btn:active, .next-btn:active { transform: scale(0.97); }
+
+  /* --- MOBILE RESPONSIVE LAYOUT --- */
+  @media (max-width: 500px) {
+    .game-header {
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+    .header-titles {
+      width: 100%;
+      justify-content: center;
+    }
+    .header-actions {
+      width: 100%;
+      justify-content: center;
+      flex-wrap: wrap; 
+    }
+    
+    .hints-grid {
+      grid-template-columns: 1fr; 
+    }
+
+    .input-row {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    .submit-btn {
+      width: 100%;
+      padding: 15px 20px; 
+    }
+  }
 </style>
