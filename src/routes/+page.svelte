@@ -14,22 +14,22 @@
   let isLoading = true; 
   let shareButtonText = "📋 Share Results";
   
-  // Instructions State
   let showInstructions = false;
-  
-  // Tracking past guesses
   let pastGuesses = [];
 
   const apiKey = env.PUBLIC_TMDB_KEY; 
 
   let dailyShow = null;
 
-  // --- ARCHIVE STATE ---
+  // --- ARCHIVE & MEMORY STATE ---
   let currentView = 'game'; 
   let realTodayNumber = 1;  
   let activeDayNumber = 1;  
   let allShowIds = [];      
   let playerSaves = {};     
+  
+  // NEW: The memory cache for daily shows
+  let idCache = {};         
 
   // --- SVELTE MAGIC: Reactive Declarations ---
   $: maxSeason = dailyShow ? Math.max(...dailyShow.chartData.map(d => d.season)) : 0;
@@ -55,7 +55,6 @@
     }
   }
 
-  // --- INSTRUCTIONS LOGIC ---
   function toggleInstructions() {
     showInstructions = !showInstructions;
     if (showInstructions && typeof window !== 'undefined') {
@@ -75,6 +74,13 @@
     }
   }
 
+  // NEW: Save the locked-in show IDs
+  function saveIdCache() {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('teledle_id_cache', JSON.stringify(idCache));
+    }
+  }
+
   function loadAllSaves() {
     if (typeof window !== 'undefined') {
       if (!localStorage.getItem('showgraph_seen_rules')) {
@@ -82,28 +88,16 @@
         localStorage.setItem('showgraph_seen_rules', 'true');
       }
 
-      const oldSave = localStorage.getItem('showgraph_save');
-      if (oldSave) {
-        try {
-          const parsedOld = JSON.parse(oldSave);
-          if (parsedOld.dayNumber) {
-            playerSaves[parsedOld.dayNumber] = { 
-              guessCount: parsedOld.guessCount, 
-              gameStatus: parsedOld.gameStatus,
-              pastGuesses: [] 
-            };
-          }
-          localStorage.removeItem('showgraph_save');
-        } catch(e) {}
-      }
-
+      // Load Game Saves
       const savedData = localStorage.getItem('showgraph_saves_v2');
       if (savedData) {
-        try {
-          playerSaves = JSON.parse(savedData);
-        } catch (e) {
-          console.error("Failed to parse save data", e);
-        }
+        try { playerSaves = JSON.parse(savedData); } catch (e) { }
+      }
+
+      // NEW: Load the Daily Show Cache
+      const cachedIds = localStorage.getItem('teledle_id_cache');
+      if (cachedIds) {
+        try { idCache = JSON.parse(cachedIds); } catch (e) { }
       }
     }
   }
@@ -136,6 +130,7 @@
 
     try {
       let showIds = [];
+      // Pulling dynamically from the Top 400 live TMDB lists again
       for (let i = 1; i <= 20; i++) {
         const res = await fetch(`https://api.themoviedb.org/3/tv/top_rated?api_key=${apiKey}&language=en-US&page=${i}`);
         const data = await res.json();
@@ -150,12 +145,15 @@
         }
       }
       
+      // NEW: Remove duplicates and sort by ID. This makes the list 100% immune to daily rating fluctuations!
+      showIds = [...new Set(showIds)].sort((a, b) => a - b);
+      
       allShowIds = showIds;
       playSpecificDay(realTodayNumber);
 
     } catch (error) {
       console.error("Error building show pool:", error);
-      allShowIds = [1396]; 
+      allShowIds = [1396]; // Fallback to Breaking Bad
       playSpecificDay(realTodayNumber);
     }
   }
@@ -169,7 +167,19 @@
     
     applyDayState(activeDayNumber);
     
-    const todaysId = allShowIds[(activeDayNumber - 1) % allShowIds.length];
+    let todaysId;
+    
+    // NEW: The Memory Lock Check
+    if (idCache[activeDayNumber]) {
+      // If we already picked a show for this day, use it!
+      todaysId = idCache[activeDayNumber];
+    } else {
+      // If it's a fresh day, pick it from the pool, save it to memory, and never change it.
+      todaysId = allShowIds[(activeDayNumber - 1) % allShowIds.length];
+      idCache[activeDayNumber] = todaysId;
+      saveIdCache();
+    }
+    
     await loadDailyShow(todaysId);
   }
 
@@ -308,7 +318,6 @@
       else emojiBoxes += '⬛';
     }
     
-    // CHANGED: Now says Teledle instead of ShowGraph
     const shareText = `Teledle #${activeDayNumber} 📺\nScore: ${finalScore}/6\n${emojiBoxes}\nPlay at: https://teledle.vercel.app/`;
     
     navigator.clipboard.writeText(shareText).then(() => {
