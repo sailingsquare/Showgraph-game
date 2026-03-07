@@ -309,7 +309,7 @@
     }
     
     // CHANGED: Now says Teledle instead of ShowGraph
-    const shareText = `Teledle #${activeDayNumber} 📺\nScore: ${finalScore}/6\n${emojiBoxes}\nPlay at: https://showgraph-game.vercel.app/`;
+    const shareText = `Teledle #${activeDayNumber} 📺\nScore: ${finalScore}/6\n${emojiBoxes}\nPlay at: https://teledle.vercel.app/`;
     
     navigator.clipboard.writeText(shareText).then(() => {
       shareButtonText = "✅ Copied!";
