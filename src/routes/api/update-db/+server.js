@@ -1,7 +1,13 @@
-// src/routes/api/update-db/+server.js
 import { json } from '@sveltejs/kit';
-import { kv } from '@vercel/kv';
+import { createClient } from '@vercel/kv';
 import { env } from '$env/dynamic/public';
+// CHANGED: Back to the KV keys that are actually in your .env file!
+import { KV_REST_API_URL, KV_REST_API_TOKEN } from '$env/static/private';
+
+const kv = createClient({
+    url: KV_REST_API_URL,
+    token: KV_REST_API_TOKEN
+});
 
 export async function GET() {
     const apiKey = env.PUBLIC_TMDB_KEY;
@@ -24,7 +30,7 @@ export async function GET() {
             }
         }
         
-        // Remove duplicates and sort by ID so the order NEVER shifts randomly
+        // Remove duplicates and sort by ID
         showIds = [...new Set(showIds)].sort((a, b) => a - b);
         
         // Save the master list to the Vercel KV Database
