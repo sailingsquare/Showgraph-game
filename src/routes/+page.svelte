@@ -4,6 +4,9 @@
   import { fade } from 'svelte/transition';
   import confetti from 'canvas-confetti';
 
+  // NEW: Receives the database list directly from +page.server.js
+  export let data;
+
   // --- GAME STATE ---
   let guessCount = 0;
   let gameStatus = 'playing'; 
@@ -18,20 +21,15 @@
   let pastGuesses = [];
 
   const apiKey = env.PUBLIC_TMDB_KEY; 
-
   let dailyShow = null;
 
-  // --- ARCHIVE & MEMORY STATE ---
+  // --- ARCHIVE STATE ---
   let currentView = 'game'; 
   let realTodayNumber = 1;  
   let activeDayNumber = 1;  
   let allShowIds = [];      
   let playerSaves = {};     
-  
-  // NEW: The memory cache for daily shows
-  let idCache = {};         
 
-  // --- SVELTE MAGIC: Reactive Declarations ---
   $: maxSeason = dailyShow ? Math.max(...dailyShow.chartData.map(d => d.season)) : 0;
   $: maxEpisode = dailyShow ? Math.max(...dailyShow.chartData.map(d => d.episode)) : 0;
   
@@ -43,61 +41,44 @@
     return map;
   }, {}) : {};
 
-  // --- CONFETTI LOGIC ---
   function triggerConfetti() {
     if (typeof window !== 'undefined') {
-      confetti({
-        particleCount: 150,
-        spread: 80,
-        origin: { y: 0.6 },
-        colors: ['#4caf50', '#3b82f6', '#fbc02d', '#ffffff']
-      });
+      confetti({ particleCount: 150, spread: 80, origin: { y: 0.6 }, colors: ['#4caf50', '#3b82f6', '#fbc02d', '#ffffff'] });
     }
   }
 
   function toggleInstructions() {
     showInstructions = !showInstructions;
     if (showInstructions && typeof window !== 'undefined') {
-      localStorage.setItem('showgraph_seen_rules', 'true');
+      localStorage.setItem('teledle_seen_rules', 'true');
     }
   }
 
-  // --- SAVE / LOAD LOGIC ---
+  // --- SAVE / LOAD LOGIC (ANNUAL RESET CAPABLE) ---
   function saveGameState() {
     if (typeof window !== 'undefined') {
+      const currentYear = new Date().getFullYear();
       playerSaves[activeDayNumber] = {
         guessCount: guessCount,
         gameStatus: gameStatus,
         pastGuesses: pastGuesses 
       };
-      localStorage.setItem('showgraph_saves_v2', JSON.stringify(playerSaves));
-    }
-  }
-
-  // NEW: Save the locked-in show IDs
-  function saveIdCache() {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('teledle_id_cache', JSON.stringify(idCache));
+      // Saves are tied to the current year! E.g. "teledle_saves_2026"
+      localStorage.setItem(`teledle_saves_${currentYear}`, JSON.stringify(playerSaves));
     }
   }
 
   function loadAllSaves() {
     if (typeof window !== 'undefined') {
-      if (!localStorage.getItem('showgraph_seen_rules')) {
+      if (!localStorage.getItem('teledle_seen_rules')) {
         showInstructions = true;
-        localStorage.setItem('showgraph_seen_rules', 'true');
+        localStorage.setItem('teledle_seen_rules', 'true');
       }
 
-      // Load Game Saves
-      const savedData = localStorage.getItem('showgraph_saves_v2');
+      const currentYear = new Date().getFullYear();
+      const savedData = localStorage.getItem(`teledle_saves_${currentYear}`);
       if (savedData) {
         try { playerSaves = JSON.parse(savedData); } catch (e) { }
-      }
-
-      // NEW: Load the Daily Show Cache
-      const cachedIds = localStorage.getItem('teledle_id_cache');
-      if (cachedIds) {
-        try { idCache = JSON.parse(cachedIds); } catch (e) { }
       }
     }
   }
@@ -118,44 +99,19 @@
   async function initGameEngine() {
     loadAllSaves();
 
-    const launchDate = new Date(2026, 2, 1); 
     const today = new Date();
+    const currentYear = today.getFullYear();
+    
+    // NEW: Launch date is ALWAYS Jan 1st of the current year
+    const launchDate = new Date(currentYear, 0, 1); 
     today.setHours(0, 0, 0, 0);
     
     const diffTime = today.getTime() - launchDate.getTime();
     realTodayNumber = Math.max(1, Math.round(diffTime / (1000 * 60 * 60 * 24)) + 1);
 
-    const allowedRegions = ["US", "JP", "KR", "GB", "IN", "FR", "DE", "MX", "BR"];
-    const excludedGenres = [10763, 10767];
-
-    try {
-      let showIds = [];
-      // Pulling dynamically from the Top 400 live TMDB lists again
-      for (let i = 1; i <= 20; i++) {
-        const res = await fetch(`https://api.themoviedb.org/3/tv/top_rated?api_key=${apiKey}&language=en-US&page=${i}`);
-        const data = await res.json();
-        
-        if (data.results) {
-          const filteredShows = data.results.filter(show => {
-            const isAllowedRegion = show.origin_country && show.origin_country.some(country => allowedRegions.includes(country));
-            const isNotNewsOrTalk = !show.genre_ids.some(id => excludedGenres.includes(id));
-            return isAllowedRegion && isNotNewsOrTalk;
-          });
-          showIds = [...showIds, ...filteredShows.map(show => show.id)];
-        }
-      }
-      
-      // NEW: Remove duplicates and sort by ID. This makes the list 100% immune to daily rating fluctuations!
-      showIds = [...new Set(showIds)].sort((a, b) => a - b);
-      
-      allShowIds = showIds;
-      playSpecificDay(realTodayNumber);
-
-    } catch (error) {
-      console.error("Error building show pool:", error);
-      allShowIds = [1396]; // Fallback to Breaking Bad
-      playSpecificDay(realTodayNumber);
-    }
+    // Load the massive list from your Vercel Database!
+    allShowIds = data.masterShowPool;
+    playSpecificDay(realTodayNumber);
   }
 
   async function playSpecificDay(dayTarget) {
@@ -167,19 +123,7 @@
     
     applyDayState(activeDayNumber);
     
-    let todaysId;
-    
-    // NEW: The Memory Lock Check
-    if (idCache[activeDayNumber]) {
-      // If we already picked a show for this day, use it!
-      todaysId = idCache[activeDayNumber];
-    } else {
-      // If it's a fresh day, pick it from the pool, save it to memory, and never change it.
-      todaysId = allShowIds[(activeDayNumber - 1) % allShowIds.length];
-      idCache[activeDayNumber] = todaysId;
-      saveIdCache();
-    }
-    
+    const todaysId = allShowIds[(activeDayNumber - 1) % allShowIds.length];
     await loadDailyShow(todaysId);
   }
 
@@ -196,23 +140,14 @@
         if (seasonData.episodes) {
           seasonData.episodes.forEach((ep, index) => {
             if (ep.vote_average > 0) {
-              fetchedChartData.push({ 
-                season: s, 
-                episode: index + 1, 
-                rating: ep.vote_average 
-              });
+              fetchedChartData.push({ season: s, episode: index + 1, rating: ep.vote_average });
             }
           });
         }
       }
 
-      const mainActorName = showData.credits && showData.credits.cast.length > 0 
-        ? showData.credits.cast[0].name 
-        : "Unknown";
-        
-      const topKeywords = showData.keywords && showData.keywords.results.length > 0
-        ? showData.keywords.results.slice(0, 3).map(k => k.name).join(", ")
-        : "None";
+      const mainActorName = showData.credits && showData.credits.cast.length > 0 ? showData.credits.cast[0].name : "Unknown";
+      const topKeywords = showData.keywords && showData.keywords.results.length > 0 ? showData.keywords.results.slice(0, 3).map(k => k.name).join(", ") : "None";
 
       dailyShow = {
         title: showData.name,
@@ -226,7 +161,6 @@
         },
         chartData: fetchedChartData
       };
-      
       isLoading = false;
     } catch (error) {
       console.error("Failed to load show data:", error);
@@ -241,7 +175,7 @@
     initGameEngine(); 
   });
 
-  // --- GAME LOGIC ---
+  // --- UI LOGIC ---
   function getRatingColor(rating) {
     if (rating >= 9.7) return '#3b82f6'; 
     if (rating >= 9.0) return '#2e7d32'; 
@@ -278,16 +212,8 @@
     searchTimeout = setTimeout(() => { searchTMDB(currentInput); }, 300); 
   }
 
-  function handleKeydown(event) {
-    if (event.key === 'Enter') {
-      handleGuess();
-    }
-  }
-
-  function selectShow(showName) {
-    currentInput = showName;
-    searchResults = []; 
-  }
+  function handleKeydown(event) { if (event.key === 'Enter') handleGuess(); }
+  function selectShow(showName) { currentInput = showName; searchResults = []; }
 
   function handleGuess() {
     if (gameStatus !== 'playing' || isLoading || !dailyShow || currentInput.trim() === "") return;
@@ -303,15 +229,12 @@
     }
     
     saveGameState();
-    
-    currentInput = ""; 
-    searchResults = []; 
+    currentInput = ""; searchResults = []; 
   }
 
   function shareResults() {
     const finalScore = gameStatus === 'won' ? guessCount + 1 : 'X';
     let emojiBoxes = '';
-    
     for (let i = 0; i < 6; i++) {
       if (i < guessCount) emojiBoxes += '🟥';
       else if (i === guessCount && gameStatus === 'won') emojiBoxes += '🟩';
@@ -319,7 +242,6 @@
     }
     
     const shareText = `Teledle #${activeDayNumber} 📺\nScore: ${finalScore}/6\n${emojiBoxes}\nPlay at: https://teledle.vercel.app/`;
-    
     navigator.clipboard.writeText(shareText).then(() => {
       shareButtonText = "✅ Copied!";
       setTimeout(() => { shareButtonText = "📋 Share Results"; }, 2000);
@@ -328,7 +250,6 @@
 </script>
 
 <div class="theme-wrapper {isDarkMode ? 'dark-theme' : 'light-theme'}">
-  
   {#if showInstructions}
     <div class="modal-backdrop" on:click={toggleInstructions} in:fade={{ duration: 200 }}>
       <div class="modal-content" on:click|stopPropagation>
@@ -385,10 +306,7 @@
         <div class="archive-grid">
           {#each Array.from({ length: realTodayNumber }, (_, i) => i + 1) as day}
             {@const save = playerSaves[day]}
-            <button 
-              class="archive-btn {save ? save.gameStatus : 'unplayed'} {day === activeDayNumber ? 'active-puzzle' : ''}" 
-              on:click={() => playSpecificDay(day)}
-            >
+            <button class="archive-btn {save ? save.gameStatus : 'unplayed'} {day === activeDayNumber ? 'active-puzzle' : ''}" on:click={() => playSpecificDay(day)}>
               <div class="archive-day">Day {day}</div>
               <div class="archive-status">
                 {#if save && save.gameStatus === 'won'} 🟩
@@ -416,9 +334,7 @@
               {#each seasonList as s}
                 {@const rating = ratingMap[s + '-' + e]}
                 {#if rating}
-                  <div class="heatmap-cell rating-box" style="background-color: {getRatingColor(rating)};">
-                    {rating.toFixed(1)}
-                  </div>
+                  <div class="heatmap-cell rating-box" style="background-color: {getRatingColor(rating)};">{rating.toFixed(1)}</div>
                 {:else} 
                   <div class="heatmap-cell empty"></div>
                 {/if}
@@ -431,42 +347,12 @@
       <div class="hint-box">
         <h3>Hints</h3>
         <div class="hints-grid">
-          <div class="hint-card">
-            <span class="hint-label">Release Run</span>
-            <span class="hint-value">{dailyShow.hints.releaseYears}</span>
-          </div>
-          <div class="hint-card">
-            <span class="hint-label">Total Reviews</span>
-            <span class="hint-value">{dailyShow.hints.totalReviews}</span>
-          </div>
-
-          {#if guessCount >= 1 || gameStatus !== 'playing'} 
-            <div class="hint-card" in:fade={{ duration: 600 }}>
-              <span class="hint-label">Genre</span>
-              <span class="hint-value">{dailyShow.hints.genre}</span>
-            </div>
-          {/if}
-          
-          {#if guessCount >= 2 || gameStatus !== 'playing'} 
-            <div class="hint-card" in:fade={{ duration: 600 }}>
-              <span class="hint-label">Original Airing Network</span>
-              <span class="hint-value">{dailyShow.hints.network}</span>
-            </div>
-          {/if}
-
-          {#if guessCount >= 3 || gameStatus !== 'playing'} 
-            <div class="hint-card" in:fade={{ duration: 600 }}>
-              <span class="hint-label">Main Actor</span>
-              <span class="hint-value">{dailyShow.hints.mainActor}</span>
-            </div>
-          {/if}
-
-          {#if guessCount >= 4 || gameStatus !== 'playing'} 
-            <div class="hint-card" in:fade={{ duration: 600 }}>
-              <span class="hint-label">Keywords</span>
-              <span class="hint-value" style="text-transform: capitalize;">{dailyShow.hints.keywords}</span>
-            </div>
-          {/if}
+          <div class="hint-card"><span class="hint-label">Release Run</span><span class="hint-value">{dailyShow.hints.releaseYears}</span></div>
+          <div class="hint-card"><span class="hint-label">Total Reviews</span><span class="hint-value">{dailyShow.hints.totalReviews}</span></div>
+          {#if guessCount >= 1 || gameStatus !== 'playing'} <div class="hint-card" in:fade={{ duration: 600 }}><span class="hint-label">Genre</span><span class="hint-value">{dailyShow.hints.genre}</span></div> {/if}
+          {#if guessCount >= 2 || gameStatus !== 'playing'} <div class="hint-card" in:fade={{ duration: 600 }}><span class="hint-label">Original Airing Network</span><span class="hint-value">{dailyShow.hints.network}</span></div> {/if}
+          {#if guessCount >= 3 || gameStatus !== 'playing'} <div class="hint-card" in:fade={{ duration: 600 }}><span class="hint-label">Main Actor</span><span class="hint-value">{dailyShow.hints.mainActor}</span></div> {/if}
+          {#if guessCount >= 4 || gameStatus !== 'playing'} <div class="hint-card" in:fade={{ duration: 600 }}><span class="hint-label">Keywords</span><span class="hint-value" style="text-transform: capitalize;">{dailyShow.hints.keywords}</span></div> {/if}
         </div>
       </div>
 
@@ -476,13 +362,7 @@
           <ul class="guesses-list">
             {#each pastGuesses as guess, index}
               <li class="guess-item">
-                <span class="guess-icon">
-                  {#if index === pastGuesses.length - 1 && gameStatus === 'won'}
-                    ✅
-                  {:else}
-                    ❌
-                  {/if}
-                </span>
+                <span class="guess-icon">{#if index === pastGuesses.length - 1 && gameStatus === 'won'}✅{:else}❌{/if}</span>
                 <span class="guess-text">{guess}</span>
               </li>
             {/each}
@@ -493,37 +373,24 @@
       {#if gameStatus !== 'playing'}
         <div class="end-screen">
           {#if gameStatus === 'won'}
-            <h2>🎉 You Win! The show was {dailyShow.title}!</h2>
-            <p>Guessed in {guessCount + 1} tries.</p>
+            <h2>🎉 You Win! The show was {dailyShow.title}!</h2><p>Guessed in {guessCount + 1} tries.</p>
           {:else}
             <h2>Game Over. 😢 The show was {dailyShow.title}.</h2>
           {/if}
           <button class="share-btn" on:click={shareResults}>{shareButtonText}</button>
-          
           {#if activeDayNumber < realTodayNumber}
              <button class="next-btn" on:click={() => playSpecificDay(activeDayNumber + 1)}>⏭️ Next Puzzle</button>
           {/if}
         </div>
       {:else}
         <p class="guess-counter">Guesses remaining: {6 - guessCount}</p>
-        
         <div class="input-row">
           <div class="search-container">
-              <input 
-                type="text" 
-                class="search-input" 
-                value={currentInput} 
-                on:input={handleInput} 
-                on:keydown={handleKeydown}
-                placeholder="Search for a TV show..." 
-              />
+              <input type="text" class="search-input" value={currentInput} on:input={handleInput} on:keydown={handleKeydown} placeholder="Search for a TV show..." />
               {#if searchResults.length > 0}
                 <ul class="dropdown-list">
                   {#each searchResults as result}
-                    <li on:click={() => selectShow(result.name)} class="dropdown-item">
-                      <strong>{result.name}</strong> 
-                      {#if result.first_air_date} <span class="year-text">({result.first_air_date.substring(0,4)})</span> {/if}
-                    </li>
+                    <li on:click={() => selectShow(result.name)} class="dropdown-item"><strong>{result.name}</strong>{#if result.first_air_date} <span class="year-text">({result.first_air_date.substring(0,4)})</span>{/if}</li>
                   {/each}
                 </ul>
               {/if}
