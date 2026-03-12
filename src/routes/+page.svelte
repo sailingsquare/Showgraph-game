@@ -4,7 +4,6 @@
   import { fade } from 'svelte/transition';
   import confetti from 'canvas-confetti';
 
-  // Receives the database list directly from +page.server.js
   export let data;
 
   // --- GAME STATE ---
@@ -30,7 +29,6 @@
   let allShowIds = [];      
   let playerSaves = {};     
 
-  // CHANGED: We now use the true maximums pulled directly from the API response
   $: maxSeason = dailyShow ? dailyShow.maxSeason : 0;
   $: maxEpisode = dailyShow ? dailyShow.maxEpisode : 0;
   
@@ -55,7 +53,7 @@
     }
   }
 
-  // --- SAVE / LOAD LOGIC (ANNUAL RESET CAPABLE) ---
+  // --- SAVE / LOAD LOGIC ---
   function saveGameState() {
     if (typeof window !== 'undefined') {
       const currentYear = new Date().getFullYear();
@@ -102,14 +100,12 @@
     const today = new Date();
     const currentYear = today.getFullYear();
     
-    // Launch date is ALWAYS Jan 1st of the current year
     const launchDate = new Date(currentYear, 0, 1); 
     today.setHours(0, 0, 0, 0);
     
     const diffTime = today.getTime() - launchDate.getTime();
     realTodayNumber = Math.max(1, Math.round(diffTime / (1000 * 60 * 60 * 24)) + 1);
 
-    // Load the massive list from your Vercel Database!
     allShowIds = data.masterShowPool;
     playSpecificDay(realTodayNumber);
   }
@@ -133,7 +129,6 @@
       const showData = await showRes.json();
       let fetchedChartData = [];
       
-      // CHANGED: Variables to track the TRUE size of the show
       let actualMaxSeason = 0;
       let actualMaxEpisode = 0;
 
@@ -142,7 +137,6 @@
         const seasonData = await seasonRes.json();
         
         if (seasonData.episodes && seasonData.episodes.length > 0) {
-          // Track the absolute maximums regardless of ratings
           actualMaxSeason = Math.max(actualMaxSeason, s);
           actualMaxEpisode = Math.max(actualMaxEpisode, seasonData.episodes.length);
 
@@ -168,7 +162,6 @@
           keywords: topKeywords
         },
         chartData: fetchedChartData,
-        // Send the true maximums to the grid builder
         maxSeason: actualMaxSeason,
         maxEpisode: actualMaxEpisode
       };
@@ -334,7 +327,7 @@
       <div class="heatmap-wrapper" in:fade={{ duration: 200 }}>
         <div class="heatmap">
           <div class="heatmap-row">
-            <div class="heatmap-cell empty"></div>
+            <div class="heatmap-cell corner"></div>
             {#each seasonList as s}
               <div class="heatmap-cell header">S{s}</div>
             {/each}
@@ -347,7 +340,7 @@
                 {#if rating}
                   <div class="heatmap-cell rating-box" style="background-color: {getRatingColor(rating)};">{rating.toFixed(1)}</div>
                 {:else} 
-                  <div class="heatmap-cell empty"></div>
+                  <div class="heatmap-cell empty">?</div>
                 {/if}
               {/each}
             </div>
@@ -443,7 +436,8 @@
     --btn-bg: #4caf50;
     --btn-text: #fff;
     --share-bg: #3b82f6; 
-    --empty-cell: #2a2a2a; /* NEW: Dark gray placeholder for unrated episodes */
+    --empty-cell: #2a2a2a; 
+    --empty-text: #555; /* NEW: Darker gray for the "?" so it's subtle */
   }
 
   .light-theme {
@@ -456,7 +450,8 @@
     --btn-bg: #3b82f6;
     --btn-text: #fff;
     --share-bg: #10b981; 
-    --empty-cell: #e5e7eb; /* NEW: Light gray placeholder for unrated episodes */
+    --empty-cell: #e5e7eb; 
+    --empty-text: #9ca3af; /* NEW: Light gray for the "?" */
   }
 
   /* --- LAYOUT --- */
@@ -666,9 +661,14 @@
     font-weight: normal;
   }
   
+  /* NEW: Target the corner specifically to keep it invisible */
+  .heatmap-cell.corner {
+    background-color: transparent;
+  }
+
   .heatmap-cell.empty {
-    /* CHANGED: Uses the subtle placeholder color instead of fully transparent */
     background-color: var(--empty-cell);
+    color: var(--empty-text); /* Added text color for the '?' */
   }
   
   .rating-box {
