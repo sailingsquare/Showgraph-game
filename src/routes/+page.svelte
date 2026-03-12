@@ -349,7 +349,7 @@
                   {:else} 
                     <div class="heatmap-cell empty">?</div>
                   {/if}
-                {#else}
+                {:else}
                   <div class="heatmap-cell nonexistent"></div>
                 {/if}
               {/each}
