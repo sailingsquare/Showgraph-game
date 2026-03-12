@@ -125,13 +125,13 @@
 
   async function loadDailyShow(tmdbId) {
     try {
-      const showRes = await fetch(`https://api.themoviedb.org/3/tv/${tmdbId}?api_key=${apiKey}&append_to_response=credits,keywords`);
+      // CHANGED: We added external_ids to the API request to grab the IMDb ID
+      const showRes = await fetch(`https://api.themoviedb.org/3/tv/${tmdbId}?api_key=${apiKey}&append_to_response=credits,keywords,external_ids`);
       const showData = await showRes.json();
       let fetchedChartData = [];
       
       let actualMaxSeason = 0;
       let actualMaxEpisode = 0;
-      // CHANGED: We now track the exact length of each individual season!
       let seasonLengths = {};
 
       for (let s = 1; s <= showData.number_of_seasons; s++) {
@@ -141,7 +141,6 @@
         if (seasonData.episodes && seasonData.episodes.length > 0) {
           actualMaxSeason = Math.max(actualMaxSeason, s);
           actualMaxEpisode = Math.max(actualMaxEpisode, seasonData.episodes.length);
-          // Store the exact length of this specific season
           seasonLengths[s] = seasonData.episodes.length;
 
           seasonData.episodes.forEach((ep, index) => {
@@ -154,6 +153,9 @@
 
       const mainActorName = showData.credits && showData.credits.cast.length > 0 ? showData.credits.cast[0].name : "Unknown";
       const topKeywords = showData.keywords && showData.keywords.results.length > 0 ? showData.keywords.results.slice(0, 3).map(k => k.name).join(", ") : "None";
+      
+      // CHANGED: Extract the IMDb ID if TMDB has it
+      const imdbId = showData.external_ids ? showData.external_ids.imdb_id : null;
 
       dailyShow = {
         title: showData.name,
@@ -168,8 +170,8 @@
         chartData: fetchedChartData,
         maxSeason: actualMaxSeason,
         maxEpisode: actualMaxEpisode,
-        // Send the season lengths dictionary to the grid renderer
-        seasonLengths: seasonLengths
+        seasonLengths: seasonLengths,
+        imdbId: imdbId // Save it so the HTML can use it later
       };
       isLoading = false;
     } catch (error) {
@@ -349,7 +351,7 @@
                   {:else} 
                     <div class="heatmap-cell empty">?</div>
                   {/if}
-                {:else}
+                {:else} 
                   <div class="heatmap-cell nonexistent"></div>
                 {/if}
               {/each}
@@ -391,10 +393,20 @@
           {:else}
             <h2>Game Over. 😢 The show was {dailyShow.title}.</h2>
           {/if}
-          <button class="share-btn" on:click={shareResults}>{shareButtonText}</button>
-          {#if activeDayNumber < realTodayNumber}
-             <button class="next-btn" on:click={() => playSpecificDay(activeDayNumber + 1)}>⏭️ Next Puzzle</button>
-          {/if}
+          
+          <div class="end-actions">
+            <button class="share-btn" on:click={shareResults}>{shareButtonText}</button>
+            
+            {#if dailyShow.imdbId}
+              <a href="https://www.imdb.com/title/{dailyShow.imdbId}/" target="_blank" rel="noopener noreferrer" class="imdb-btn">
+                🎬 View on IMDb
+              </a>
+            {/if}
+
+            {#if activeDayNumber < realTodayNumber}
+               <button class="next-btn" on:click={() => playSpecificDay(activeDayNumber + 1)}>⏭️ Next Puzzle</button>
+            {/if}
+          </div>
         </div>
       {:else}
         <p class="guess-counter">Guesses remaining: {6 - guessCount}</p>
@@ -675,7 +687,6 @@
     background-color: transparent;
   }
 
-  /* NEW: Keeps the nonexistent trailing boxes invisible to create the ragged edge */
   .heatmap-cell.nonexistent {
     background-color: transparent;
   }
@@ -884,8 +895,17 @@
   .end-screen {
     text-align: center;
   }
+
+  /* CHANGED: Flexbox layout for end screen buttons so they wrap cleanly */
+  .end-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 15px;
+  }
   
-  .share-btn, .next-btn {
+  .share-btn, .next-btn, .imdb-btn {
     color: white;
     border: none;
     padding: 12px 24px;
@@ -893,9 +913,11 @@
     font-size: 16px;
     font-weight: bold;
     cursor: pointer;
-    margin: 15px 5px 0 5px;
     transition: transform 0.1s, opacity 0.2s;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.15);
+    text-decoration: none; /* Removes underline from the anchor tag */
+    display: inline-block;
+    box-sizing: border-box;
   }
 
   .share-btn {
@@ -906,9 +928,15 @@
     background-color: var(--input-border);
     color: var(--text-color);
   }
+
+  /* NEW: IMDb button styling */
+  .imdb-btn {
+    background-color: #f5c518; 
+    color: #000000;
+  }
   
-  .share-btn:hover, .next-btn:hover { opacity: 0.9; }
-  .share-btn:active, .next-btn:active { transform: scale(0.97); }
+  .share-btn:hover, .next-btn:hover, .imdb-btn:hover { opacity: 0.9; }
+  .share-btn:active, .next-btn:active, .imdb-btn:active { transform: scale(0.97); }
 
   /* --- MOBILE RESPONSIVE LAYOUT --- */
   @media (max-width: 500px) {
