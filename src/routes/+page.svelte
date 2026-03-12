@@ -4,7 +4,7 @@
   import { fade } from 'svelte/transition';
   import confetti from 'canvas-confetti';
 
-  // NEW: Receives the database list directly from +page.server.js
+  // Receives the database list directly from +page.server.js
   export let data;
 
   // --- GAME STATE ---
@@ -30,8 +30,9 @@
   let allShowIds = [];      
   let playerSaves = {};     
 
-  $: maxSeason = dailyShow ? Math.max(...dailyShow.chartData.map(d => d.season)) : 0;
-  $: maxEpisode = dailyShow ? Math.max(...dailyShow.chartData.map(d => d.episode)) : 0;
+  // CHANGED: We now use the true maximums pulled directly from the API response
+  $: maxSeason = dailyShow ? dailyShow.maxSeason : 0;
+  $: maxEpisode = dailyShow ? dailyShow.maxEpisode : 0;
   
   $: seasonList = Array.from({ length: maxSeason }, (_, i) => i + 1);
   $: episodeList = Array.from({ length: maxEpisode }, (_, i) => i + 1);
@@ -63,7 +64,6 @@
         gameStatus: gameStatus,
         pastGuesses: pastGuesses 
       };
-      // Saves are tied to the current year! E.g. "teledle_saves_2026"
       localStorage.setItem(`teledle_saves_${currentYear}`, JSON.stringify(playerSaves));
     }
   }
@@ -102,7 +102,7 @@
     const today = new Date();
     const currentYear = today.getFullYear();
     
-    // NEW: Launch date is ALWAYS Jan 1st of the current year
+    // Launch date is ALWAYS Jan 1st of the current year
     const launchDate = new Date(currentYear, 0, 1); 
     today.setHours(0, 0, 0, 0);
     
@@ -132,12 +132,20 @@
       const showRes = await fetch(`https://api.themoviedb.org/3/tv/${tmdbId}?api_key=${apiKey}&append_to_response=credits,keywords`);
       const showData = await showRes.json();
       let fetchedChartData = [];
+      
+      // CHANGED: Variables to track the TRUE size of the show
+      let actualMaxSeason = 0;
+      let actualMaxEpisode = 0;
 
       for (let s = 1; s <= showData.number_of_seasons; s++) {
         const seasonRes = await fetch(`https://api.themoviedb.org/3/tv/${tmdbId}/season/${s}?api_key=${apiKey}`);
         const seasonData = await seasonRes.json();
         
-        if (seasonData.episodes) {
+        if (seasonData.episodes && seasonData.episodes.length > 0) {
+          // Track the absolute maximums regardless of ratings
+          actualMaxSeason = Math.max(actualMaxSeason, s);
+          actualMaxEpisode = Math.max(actualMaxEpisode, seasonData.episodes.length);
+
           seasonData.episodes.forEach((ep, index) => {
             if (ep.vote_average > 0) {
               fetchedChartData.push({ season: s, episode: index + 1, rating: ep.vote_average });
@@ -159,7 +167,10 @@
           mainActor: mainActorName,
           keywords: topKeywords
         },
-        chartData: fetchedChartData
+        chartData: fetchedChartData,
+        // Send the true maximums to the grid builder
+        maxSeason: actualMaxSeason,
+        maxEpisode: actualMaxEpisode
       };
       isLoading = false;
     } catch (error) {
@@ -432,6 +443,7 @@
     --btn-bg: #4caf50;
     --btn-text: #fff;
     --share-bg: #3b82f6; 
+    --empty-cell: #2a2a2a; /* NEW: Dark gray placeholder for unrated episodes */
   }
 
   .light-theme {
@@ -444,6 +456,7 @@
     --btn-bg: #3b82f6;
     --btn-text: #fff;
     --share-bg: #10b981; 
+    --empty-cell: #e5e7eb; /* NEW: Light gray placeholder for unrated episodes */
   }
 
   /* --- LAYOUT --- */
@@ -654,7 +667,8 @@
   }
   
   .heatmap-cell.empty {
-    background-color: transparent;
+    /* CHANGED: Uses the subtle placeholder color instead of fully transparent */
+    background-color: var(--empty-cell);
   }
   
   .rating-box {
