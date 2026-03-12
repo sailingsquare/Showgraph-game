@@ -131,6 +131,8 @@
       
       let actualMaxSeason = 0;
       let actualMaxEpisode = 0;
+      // CHANGED: We now track the exact length of each individual season!
+      let seasonLengths = {};
 
       for (let s = 1; s <= showData.number_of_seasons; s++) {
         const seasonRes = await fetch(`https://api.themoviedb.org/3/tv/${tmdbId}/season/${s}?api_key=${apiKey}`);
@@ -139,6 +141,8 @@
         if (seasonData.episodes && seasonData.episodes.length > 0) {
           actualMaxSeason = Math.max(actualMaxSeason, s);
           actualMaxEpisode = Math.max(actualMaxEpisode, seasonData.episodes.length);
+          // Store the exact length of this specific season
+          seasonLengths[s] = seasonData.episodes.length;
 
           seasonData.episodes.forEach((ep, index) => {
             if (ep.vote_average > 0) {
@@ -163,7 +167,9 @@
         },
         chartData: fetchedChartData,
         maxSeason: actualMaxSeason,
-        maxEpisode: actualMaxEpisode
+        maxEpisode: actualMaxEpisode,
+        // Send the season lengths dictionary to the grid renderer
+        seasonLengths: seasonLengths
       };
       isLoading = false;
     } catch (error) {
@@ -336,11 +342,15 @@
             <div class="heatmap-row">
               <div class="heatmap-cell header">E{e}</div>
               {#each seasonList as s}
-                {@const rating = ratingMap[s + '-' + e]}
-                {#if rating}
-                  <div class="heatmap-cell rating-box" style="background-color: {getRatingColor(rating)};">{rating.toFixed(1)}</div>
-                {:else} 
-                  <div class="heatmap-cell empty">?</div>
+                {#if dailyShow && dailyShow.seasonLengths && e <= dailyShow.seasonLengths[s]}
+                  {@const rating = ratingMap[s + '-' + e]}
+                  {#if rating}
+                    <div class="heatmap-cell rating-box" style="background-color: {getRatingColor(rating)};">{rating.toFixed(1)}</div>
+                  {:else} 
+                    <div class="heatmap-cell empty">?</div>
+                  {/if}
+                {#else}
+                  <div class="heatmap-cell nonexistent"></div>
                 {/if}
               {/each}
             </div>
@@ -437,7 +447,7 @@
     --btn-text: #fff;
     --share-bg: #3b82f6; 
     --empty-cell: #2a2a2a; 
-    --empty-text: #555; /* NEW: Darker gray for the "?" so it's subtle */
+    --empty-text: #555; 
   }
 
   .light-theme {
@@ -451,7 +461,7 @@
     --btn-text: #fff;
     --share-bg: #10b981; 
     --empty-cell: #e5e7eb; 
-    --empty-text: #9ca3af; /* NEW: Light gray for the "?" */
+    --empty-text: #9ca3af; 
   }
 
   /* --- LAYOUT --- */
@@ -661,14 +671,18 @@
     font-weight: normal;
   }
   
-  /* NEW: Target the corner specifically to keep it invisible */
   .heatmap-cell.corner {
+    background-color: transparent;
+  }
+
+  /* NEW: Keeps the nonexistent trailing boxes invisible to create the ragged edge */
+  .heatmap-cell.nonexistent {
     background-color: transparent;
   }
 
   .heatmap-cell.empty {
     background-color: var(--empty-cell);
-    color: var(--empty-text); /* Added text color for the '?' */
+    color: var(--empty-text);
   }
   
   .rating-box {
